@@ -1,0 +1,18 @@
+node_modules/
+
+# Uploaded and staged photos (runtime data, not source)
+server/uploads/*
+!server/uploads/.gitkeep
+server/pending/
+
+# SQLite database and WAL files
+server/snapgather.db
+server/snapgather.db-shm
+server/snapgather.db-wal
+
+# Environment secrets
+.env
+
+# Build output
+dist/
+client/dist/
