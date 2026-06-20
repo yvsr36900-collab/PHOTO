@@ -1,23 +1,15 @@
 const router = require('express').Router();
 const multer = require('multer');
 const path = require('path');
-const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
-const { getDb } = require('../db/schema');
+const { supabase, mapPhoto } = require('../db/supabase');
 const { optionalAuth } = require('../middleware/authMiddleware');
 const { enforcePhotoLimit } = require('../middleware/planEnforcer');
 
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, path.join(__dirname, '..', 'uploads')),
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname).toLowerCase();
-    cb(null, `${uuidv4()}${ext}`);
-  },
-});
-
+// Use memory storage — file goes straight to Supabase Storage
 const upload = multer({
-  storage,
-  limits: { fileSize: 20 * 1024 * 1024 },
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 50 * 1024 * 1024 }, // 50 MB (Supabase free limit)
   fileFilter: (req, file, cb) => {
     const allowed = ['.jpg', '.jpeg', '.png', '.gif', '.webp'];
     if (allowed.includes(path.extname(file.originalname).toLowerCase())) cb(null, true);
@@ -26,61 +18,84 @@ const upload = multer({
 });
 
 // Upload photo to session
-router.post('/session/:sessionId', optionalAuth, (req, res, next) => {
-  // Inject userId and displayName into req.body before multer runs
-  // We read them from the form fields after upload
-  next();
-}, upload.single('photo'), enforcePhotoLimit, (req, res) => {
-  const db = getDb();
-  const session = db.prepare('SELECT * FROM sessions WHERE id = ?').get(req.params.sessionId);
-  if (!session) return res.status(404).json({ success: false, error: 'Session not found' });
+router.post('/session/:sessionId', optionalAuth, upload.single('photo'), enforcePhotoLimit, async (req, res, next) => {
+  try {
+    const { data: sessionRaw } = await supabase
+      .from('sessions').select('*').eq('id', req.params.sessionId).single();
+    if (!sessionRaw) return res.status(404).json({ success: false, error: 'Session not found' });
 
-  if (session.status === 'stopped')
-    return res.status(403).json({ success: false, error: 'Session is paused — the host must restart it before new photos can be uploaded' });
+    if (sessionRaw.status === 'stopped')
+      return res.status(403).json({ success: false, error: 'Session is paused — the host must restart it before new photos can be uploaded' });
 
-  if (new Date(session.expiresAt) <= new Date())
-    return res.status(410).json({ success: false, error: 'Session has expired' });
+    if (new Date(sessionRaw.expires_at) <= new Date())
+      return res.status(410).json({ success: false, error: 'Session has expired' });
 
-  if (!req.file) return res.status(400).json({ success: false, error: 'No file uploaded' });
+    if (!req.file) return res.status(400).json({ success: false, error: 'No file uploaded' });
 
-  const uploadedByUserId = req.user ? String(req.user.id) : (req.body.guestId || `guest_${uuidv4()}`);
-  const uploadedByName = req.user ? req.user.displayName : (req.body.displayName || 'Anonymous');
+    const uploadedByUserId = req.user ? String(req.user.id) : (req.body.guestId || `guest_${uuidv4()}`);
+    const uploadedByName = req.user ? req.user.displayName : (req.body.displayName || 'Anonymous');
 
-  const result = db.prepare(
-    'INSERT INTO photos (sessionId, uploadedByUserId, uploadedByName, filename, originalName) VALUES (?, ?, ?, ?, ?)'
-  ).run(req.params.sessionId, uploadedByUserId, uploadedByName, req.file.filename, req.file.originalname);
+    const ext = path.extname(req.file.originalname).toLowerCase();
+    const storagePath = `${req.params.sessionId}/${uuidv4()}${ext}`;
 
-  const photo = db.prepare('SELECT * FROM photos WHERE id = ?').get(result.lastInsertRowid);
-  res.status(201).json({ success: true, data: photo });
+    // Upload buffer to Supabase Storage
+    const { error: storageError } = await supabase.storage
+      .from('photos')
+      .upload(storagePath, req.file.buffer, { contentType: req.file.mimetype, upsert: false });
+
+    if (storageError) throw storageError;
+
+    const { data: { publicUrl } } = supabase.storage.from('photos').getPublicUrl(storagePath);
+
+    const { data: raw, error: dbError } = await supabase
+      .from('photos')
+      .insert({
+        session_id: req.params.sessionId,
+        uploaded_by_user_id: uploadedByUserId,
+        uploaded_by_name: uploadedByName,
+        storage_path: storagePath,
+        url: publicUrl,
+        original_name: req.file.originalname,
+      })
+      .select().single();
+
+    if (dbError) throw dbError;
+    res.status(201).json({ success: true, data: mapPhoto(raw) });
+  } catch (err) { next(err); }
 });
 
 // Get photos for a session
-router.get('/session/:sessionId', optionalAuth, (req, res) => {
-  const db = getDb();
-  const photos = db.prepare('SELECT * FROM photos WHERE sessionId = ? ORDER BY uploadedAt ASC').all(req.params.sessionId);
-  res.json({ success: true, data: photos });
+router.get('/session/:sessionId', optionalAuth, async (req, res, next) => {
+  try {
+    const { data: rows } = await supabase
+      .from('photos').select('*').eq('session_id', req.params.sessionId).order('uploaded_at', { ascending: true });
+    res.json({ success: true, data: (rows || []).map(mapPhoto) });
+  } catch (err) { next(err); }
 });
 
 // Delete a photo (uploader or session host)
-router.delete('/:photoId', optionalAuth, (req, res) => {
-  const db = getDb();
-  const photo = db.prepare('SELECT * FROM photos WHERE id = ?').get(req.params.photoId);
-  if (!photo) return res.status(404).json({ success: false, error: 'Photo not found' });
+router.delete('/:photoId', optionalAuth, async (req, res, next) => {
+  try {
+    const { data: raw } = await supabase.from('photos').select('*').eq('id', req.params.photoId).single();
+    if (!raw) return res.status(404).json({ success: false, error: 'Photo not found' });
 
-  const requesterId = req.user ? String(req.user.id) : req.body.guestId;
-  const session = db.prepare('SELECT * FROM sessions WHERE id = ?').get(photo.sessionId);
+    const photo = mapPhoto(raw);
+    const requesterId = req.user ? String(req.user.id) : req.body.guestId;
 
-  const isUploader = photo.uploadedByUserId === requesterId;
-  const isHost = req.user && session && session.hostUserId === req.user.id;
+    const { data: sessionRaw } = await supabase.from('sessions').select('host_user_id').eq('id', photo.sessionId).single();
 
-  if (!isUploader && !isHost)
-    return res.status(403).json({ success: false, error: 'Not authorized to delete this photo' });
+    const isUploader = photo.uploadedByUserId === requesterId;
+    const isHost = req.user && sessionRaw && sessionRaw.host_user_id === req.user.id;
 
-  const filePath = path.join(__dirname, '..', 'uploads', photo.filename);
-  if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    if (!isUploader && !isHost)
+      return res.status(403).json({ success: false, error: 'Not authorized to delete this photo' });
 
-  db.prepare('DELETE FROM photos WHERE id = ?').run(photo.id);
-  res.json({ success: true, data: { deleted: true } });
+    // Remove from Supabase Storage
+    await supabase.storage.from('photos').remove([raw.storage_path]);
+    await supabase.from('photos').delete().eq('id', photo.id);
+
+    res.json({ success: true, data: { deleted: true } });
+  } catch (err) { next(err); }
 });
 
 module.exports = router;

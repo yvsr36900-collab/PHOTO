@@ -28,7 +28,7 @@ export default function PhotoCard({ photo, currentUserId, isHost, onDeleted }) {
       onMouseLeave={() => setHovering(false)}
     >
       <img
-        src={`/uploads/${photo.filename}`}
+        src={photo.url}
         alt={photo.originalName}
         className="w-full h-full object-cover transition-transform duration-200 hover:scale-105"
         loading="lazy"

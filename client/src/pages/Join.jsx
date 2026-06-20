@@ -22,6 +22,7 @@ export default function JoinPage() {
   const [uploading, setUploading] = useState(false);
   const [tab, setTab] = useState('photos');
   const [copied, setCopied] = useState(false);
+  const [kickedBy, setKickedBy] = useState(null);
   const fileRef = useRef();
 
   const sessionId = session?.id;
@@ -31,13 +32,21 @@ export default function JoinPage() {
     if (code) checkSession();
   }, [code]);
 
-  // Heartbeat — keeps lastSeenAt fresh so host can see who's here
+  // Heartbeat — keeps lastSeenAt fresh and detects if the user was kicked
   useEffect(() => {
     if (step !== 'session' || !sessionId) return;
     const userId = user ? String(user.id) : guestId;
     if (!userId) return;
 
-    const ping = () => sendHeartbeat(sessionId, user ? null : userId).catch(() => {});
+    const ping = async () => {
+      try {
+        const res = await sendHeartbeat(sessionId, user ? null : userId);
+        if (res.data?.kicked) {
+          setKickedBy(res.data.hostName || 'the host');
+          setStep('kicked');
+        }
+      } catch {}
+    };
     ping();
     const t = setInterval(ping, 15000);
     return () => clearInterval(t);
@@ -126,6 +135,19 @@ export default function JoinPage() {
   }
 
   if (step === 'loading') return <div className="text-center py-20 text-gray-400">Loading…</div>;
+
+  if (step === 'kicked') return (
+    <div className="min-h-[80vh] flex items-center justify-center px-4">
+      <div className="card w-full max-w-sm text-center">
+        <p className="text-5xl mb-4">🚫</p>
+        <h1 className="text-xl font-bold mb-2">You've been removed</h1>
+        <p className="text-gray-500 text-sm mb-6">
+          You have been kicked out by <span className="font-semibold text-gray-700">{kickedBy}</span>.
+        </p>
+        <button onClick={() => navigate('/')} className="btn-secondary w-full">Go Home</button>
+      </div>
+    </div>
+  );
 
   if (step === 'error') return (
     <div className="max-w-md mx-auto px-4 py-20 text-center">

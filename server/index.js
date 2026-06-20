@@ -1,8 +1,6 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const path = require('path');
-const { initDb } = require('./db/schema');
 
 const authRoutes = require('./routes/auth');
 const sessionRoutes = require('./routes/sessions');
@@ -15,9 +13,20 @@ const syncRoutes = require('./routes/sync');
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-app.use(cors({ origin: 'http://localhost:5173', credentials: true }));
+const allowedOrigins = [
+  'http://localhost:5173',
+  process.env.CLIENT_URL,
+].filter(Boolean);
+
+app.use(cors({
+  origin: (origin, callback) => {
+    // Allow requests with no origin (mobile apps, curl, Render health checks)
+    if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
+    callback(new Error(`CORS: origin ${origin} not allowed`));
+  },
+  credentials: true,
+}));
 app.use(express.json());
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 app.use('/api/auth', authRoutes);
 app.use('/api/sessions', sessionRoutes);
@@ -31,8 +40,6 @@ app.use((err, req, res, next) => {
   console.error(err.stack);
   res.status(500).json({ success: false, error: err.message || 'Internal server error' });
 });
-
-initDb();
 
 app.listen(PORT, () => {
   console.log(`SnapGather server running on http://localhost:${PORT}`);

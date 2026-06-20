@@ -17,6 +17,7 @@ export const restartSession = (id) => api.post(`/sessions/${id}/restart`);
 export const getSessionQR = (id) => api.get(`/sessions/${id}/qr`);
 export const getSessionMembers = (id) => api.get(`/sessions/${id}/members`);
 export const sendHeartbeat = (id, guestId) => api.post(`/sessions/${id}/heartbeat`, { guestId });
+export const kickMember = (id, userId) => api.delete(`/sessions/${id}/members/${userId}`);
 
 // Photos
 export const uploadPhoto = (sessionId, formData) =>

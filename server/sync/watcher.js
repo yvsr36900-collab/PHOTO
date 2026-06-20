@@ -3,14 +3,13 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { v4: uuidv4 } = require('uuid');
-const { getDb } = require('../db/schema');
+const { supabase } = require('../db/supabase');
 
 const activeWatchers = new Map();
 const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp']);
 const BLOCKED_PATTERNS = [/Photos Library\.photoslibrary/, /\.photoslibrary/];
 
 const PENDING_BASE = path.join(__dirname, '..', 'pending');
-const UPLOADS_DIR = path.join(__dirname, '..', 'uploads');
 
 function pendingDir(sessionId) {
   return path.join(PENDING_BASE, String(sessionId));
@@ -75,33 +74,35 @@ function startWatcher(sessionId, watchPath, uploaderName) {
     if (seenFiles.has(filePath)) return;
     seenFiles.add(filePath);
 
-    try {
-      const originalName = path.basename(filePath);
+    // Use async IIFE so we can await Supabase inside the chokidar event
+    (async () => {
+      try {
+        const originalName = path.basename(filePath);
 
-      // Skip if already uploaded to this session
-      const alreadyUploaded = db.prepare(
-        'SELECT id FROM photos WHERE sessionId = ? AND originalName = ?'
-      ).get(sessionId, originalName);
-      if (alreadyUploaded) {
-        console.log(`[Sync:${sessionId}] skipping duplicate: ${originalName}`);
-        return;
+        // Skip if already uploaded to this session
+        const { data: alreadyUploaded } = await supabase
+          .from('photos').select('id').eq('session_id', sessionId).eq('original_name', originalName).maybeSingle();
+        if (alreadyUploaded) {
+          console.log(`[Sync:${sessionId}] skipping duplicate: ${originalName}`);
+          return;
+        }
+
+        // Skip if already staged (same original name)
+        const alreadyStaged = [...state.pending.values()].some((m) => m.originalName === originalName);
+        if (alreadyStaged) return;
+
+        const filename = `${uuidv4()}${ext}`;
+        const destPath = path.join(dir, filename);
+        fs.copyFileSync(filePath, destPath);
+
+        state.pending.set(filename, { filename, originalName, detectedAt: new Date().toISOString() });
+        console.log(`[Sync:${sessionId}] staged "${originalName}"`);
+      } catch (err) {
+        state.errors.unshift({ file: path.basename(filePath), error: err.message, at: new Date().toISOString() });
+        if (state.errors.length > 5) state.errors.pop();
+        console.error(`[Sync:${sessionId}] stage error:`, err.message);
       }
-
-      // Skip if already staged (same original name)
-      const alreadyStaged = [...state.pending.values()].some((m) => m.originalName === originalName);
-      if (alreadyStaged) return;
-
-      const filename = `${uuidv4()}${ext}`;
-      const destPath = path.join(dir, filename);
-      fs.copyFileSync(filePath, destPath);
-
-      state.pending.set(filename, { filename, originalName, detectedAt: new Date().toISOString() });
-      console.log(`[Sync:${sessionId}] staged "${originalName}"`);
-    } catch (err) {
-      state.errors.unshift({ file: path.basename(filePath), error: err.message, at: new Date().toISOString() });
-      if (state.errors.length > 5) state.errors.pop();
-      console.error(`[Sync:${sessionId}] stage error:`, err.message);
-    }
+    })();
   });
 
   watcher.on('ready', () => {
@@ -168,10 +169,9 @@ function getPending(sessionId) {
   });
 }
 
-function confirmUpload(sessionId, selectedFilenames) {
+async function confirmUpload(sessionId, selectedFilenames) {
   const key = String(sessionId);
   const state = activeWatchers.get(key);
-  const db = getDb();
   const dir = pendingDir(sessionId);
 
   if (!fs.existsSync(dir)) return { uploaded: 0, discarded: 0 };
@@ -183,18 +183,41 @@ function confirmUpload(sessionId, selectedFilenames) {
   let uploaded = 0;
   let discarded = 0;
 
+  const mimeMap = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif', '.webp': 'image/webp' };
+
   for (const filename of allPending) {
     const srcPath = path.join(dir, filename);
     if (selectedSet.has(filename)) {
       try {
-        fs.copyFileSync(srcPath, path.join(UPLOADS_DIR, filename));
-        fs.unlinkSync(srcPath);
         const meta = state?.pending.get(filename);
-        db.prepare(
-          'INSERT INTO photos (sessionId, uploadedByUserId, uploadedByName, filename, originalName) VALUES (?, ?, ?, ?, ?)'
-        ).run(sessionId, `sync_${sessionId}`, uploaderName, filename, meta?.originalName || filename);
+        const originalName = meta?.originalName || filename;
+        const ext = path.extname(filename).toLowerCase();
+        const storagePath = `${sessionId}/${filename}`;
+        const buffer = fs.readFileSync(srcPath);
+        const mimeType = mimeMap[ext] || 'image/jpeg';
+
+        // Upload to Supabase Storage
+        const { error: storageError } = await supabase.storage
+          .from('photos')
+          .upload(storagePath, buffer, { contentType: mimeType, upsert: false });
+
+        if (storageError) throw storageError;
+
+        const { data: { publicUrl } } = supabase.storage.from('photos').getPublicUrl(storagePath);
+
+        await supabase.from('photos').insert({
+          session_id: sessionId,
+          uploaded_by_user_id: `sync_${sessionId}`,
+          uploaded_by_name: uploaderName,
+          storage_path: storagePath,
+          url: publicUrl,
+          original_name: originalName,
+        });
+
+        fs.unlinkSync(srcPath);
         if (state) state.pending.delete(filename);
         uploaded++;
+        console.log(`[Sync:${sessionId}] uploaded "${originalName}"`);
       } catch (err) {
         console.error(`[Sync:${sessionId}] confirm error for ${filename}:`, err.message);
       }

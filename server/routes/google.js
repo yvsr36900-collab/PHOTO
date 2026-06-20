@@ -1,6 +1,6 @@
 const router = require('express').Router();
 const { google } = require('googleapis');
-const { getDb } = require('../db/schema');
+const { supabase } = require('../db/supabase');
 const { authMiddleware } = require('../middleware/authMiddleware');
 
 function createOAuthClient() {
@@ -32,9 +32,10 @@ router.get('/callback', async (req, res) => {
     const oauth2Client = createOAuthClient();
     const { tokens } = await oauth2Client.getToken(code);
 
-    const db = getDb();
-    db.prepare('UPDATE users SET googleAccessToken = ?, googleRefreshToken = ? WHERE id = ?')
-      .run(tokens.access_token, tokens.refresh_token || null, userId);
+    await supabase.from('users').update({
+      google_access_token: tokens.access_token,
+      google_refresh_token: tokens.refresh_token || null,
+    }).eq('id', userId);
 
     res.send('<script>window.close();</script><p>Google Drive connected! You can close this window.</p>');
   } catch (err) {
@@ -43,17 +44,19 @@ router.get('/callback', async (req, res) => {
 });
 
 // Check connection status
-router.get('/status', authMiddleware, (req, res) => {
-  const db = getDb();
-  const user = db.prepare('SELECT googleAccessToken FROM users WHERE id = ?').get(req.user.id);
-  res.json({ success: true, data: { connected: !!user?.googleAccessToken } });
+router.get('/status', authMiddleware, async (req, res, next) => {
+  try {
+    const { data: user } = await supabase.from('users').select('google_access_token').eq('id', req.user.id).single();
+    res.json({ success: true, data: { connected: !!user?.google_access_token } });
+  } catch (err) { next(err); }
 });
 
 // Disconnect Google Drive
-router.post('/disconnect', authMiddleware, (req, res) => {
-  const db = getDb();
-  db.prepare('UPDATE users SET googleAccessToken = NULL, googleRefreshToken = NULL WHERE id = ?').run(req.user.id);
-  res.json({ success: true, data: { disconnected: true } });
+router.post('/disconnect', authMiddleware, async (req, res, next) => {
+  try {
+    await supabase.from('users').update({ google_access_token: null, google_refresh_token: null }).eq('id', req.user.id);
+    res.json({ success: true, data: { disconnected: true } });
+  } catch (err) { next(err); }
 });
 
 module.exports = router;

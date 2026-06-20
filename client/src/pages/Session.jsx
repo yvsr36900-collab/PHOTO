@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useSession } from '../hooks/useSession';
 import { usePhotos } from '../hooks/usePhotos';
-import { addTime, uploadPhoto, downloadZip, exportToDrive, getRsvps, stopSession, restartSession, getSessionMembers, sendHeartbeat, getAllowlist, addToAllowlist, removeFromAllowlist } from '../api';
+import { addTime, uploadPhoto, downloadZip, exportToDrive, getRsvps, stopSession, restartSession, getSessionMembers, sendHeartbeat, getAllowlist, addToAllowlist, removeFromAllowlist, kickMember } from '../api';
 import Timer from '../components/Timer';
 import PhotoGrid from '../components/PhotoGrid';
 import QRDisplay from '../components/QRDisplay';
@@ -403,9 +403,23 @@ export default function SessionPage() {
                       title={m.isOnline ? 'Active in the last 30s' : 'Not recently active'}
                     />
                     <span className={m.isOnline ? 'text-gray-900' : 'text-gray-400'}>{m.displayName}</span>
-                    {m.isOnline && (
-                      <span className="ml-auto text-xs text-green-600">online</span>
-                    )}
+                    <div className="ml-auto flex items-center gap-2">
+                      {m.isOnline && <span className="text-xs text-green-600">online</span>}
+                      <button
+                        onClick={async () => {
+                          if (!confirm(`Remove ${m.displayName} from the session?`)) return;
+                          try {
+                            await kickMember(id, m.userId);
+                            setMembers((prev) => ({ ...prev, members: prev.members.filter((x) => x.id !== m.id) }));
+                          } catch (err) {
+                            alert(err.response?.data?.error || 'Failed to remove member');
+                          }
+                        }}
+                        className="text-xs text-red-500 hover:text-red-700 px-1.5 py-0.5 rounded hover:bg-red-50"
+                      >
+                        Kick
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>

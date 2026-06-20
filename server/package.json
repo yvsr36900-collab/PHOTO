@@ -7,6 +7,7 @@
     "dev": "nodemon index.js"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.108.2",
     "archiver": "^6.0.1",
     "bcryptjs": "^2.4.3",
     "better-sqlite3": "^9.4.3",
