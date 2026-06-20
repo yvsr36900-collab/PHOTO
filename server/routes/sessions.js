@@ -30,18 +30,26 @@ function computeStatus(session) {
 
 // Create session
 router.post('/', authMiddleware, enforceSessionLimit, (req, res) => {
-  const { name, occasionType, durationMinutes } = req.body;
+  const { name, occasionType, durationMinutes, guestListEnabled } = req.body;
   if (!name || !occasionType || !durationMinutes)
     return res.status(400).json({ success: false, error: 'name, occasionType, durationMinutes required' });
 
   const db = getDb();
+
+  if (guestListEnabled) {
+    const userRecord = db.prepare('SELECT plan FROM users WHERE id = ?').get(req.user.id);
+    const limits = getLimits(userRecord?.plan);
+    if (!limits.guestList)
+      return res.status(403).json({ success: false, error: 'Guest list requires Standard plan or above' });
+  }
+
   let joinCode;
   do { joinCode = generateJoinCode(); } while (db.prepare('SELECT id FROM sessions WHERE joinCode = ?').get(joinCode));
 
   const expiresAt = new Date(Date.now() + durationMinutes * 60000).toISOString();
   const result = db.prepare(
-    'INSERT INTO sessions (joinCode, name, occasionType, hostUserId, durationMinutes, expiresAt) VALUES (?, ?, ?, ?, ?, ?)'
-  ).run(joinCode, name, occasionType, req.user.id, durationMinutes, expiresAt);
+    'INSERT INTO sessions (joinCode, name, occasionType, hostUserId, durationMinutes, expiresAt, guestListEnabled) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  ).run(joinCode, name, occasionType, req.user.id, durationMinutes, expiresAt, guestListEnabled ? 1 : 0);
 
   const session = db.prepare('SELECT * FROM sessions WHERE id = ?').get(result.lastInsertRowid);
   res.status(201).json({ success: true, data: { ...session, ...computeStatus(session) } });
@@ -82,6 +90,16 @@ router.post('/join', optionalAuth, (req, res) => {
   const { status } = computeStatus(session);
   if (status === 'expired')
     return res.status(410).json({ success: false, error: 'Session has expired' });
+
+  const isHost = req.user && req.user.id === session.hostUserId;
+  if (session.guestListEnabled && !isHost) {
+    const joinName = req.user ? req.user.displayName : (displayName || '');
+    const allowed = db.prepare(
+      'SELECT id FROM session_allowlist WHERE sessionId = ? AND LOWER(name) = LOWER(?)'
+    ).get(session.id, joinName.trim());
+    if (!allowed)
+      return res.status(403).json({ success: false, error: 'You are not on the guest list for this session' });
+  }
 
   const userId = req.user ? String(req.user.id) : `guest_${uuidv4()}`;
   const name = req.user ? req.user.displayName : (displayName || `Guest_${userId.slice(-4)}`);
@@ -197,6 +215,51 @@ router.post('/:id/heartbeat', optionalAuth, (req, res) => {
   db.prepare('UPDATE session_members SET lastSeenAt = ? WHERE sessionId = ? AND userId = ?')
     .run(new Date().toISOString(), session.id, userId);
 
+  res.json({ success: true });
+});
+
+// Get guest allowlist (host only)
+router.get('/:id/allowlist', authMiddleware, (req, res) => {
+  const db = getDb();
+  const session = db.prepare('SELECT * FROM sessions WHERE id = ?').get(req.params.id);
+  if (!session) return res.status(404).json({ success: false, error: 'Session not found' });
+  if (session.hostUserId !== req.user.id)
+    return res.status(403).json({ success: false, error: 'Only the host can view the guest list' });
+
+  const entries = db.prepare('SELECT * FROM session_allowlist WHERE sessionId = ? ORDER BY addedAt ASC').all(req.params.id);
+  res.json({ success: true, data: entries });
+});
+
+// Add name to guest allowlist (host only, requires guestList feature)
+router.post('/:id/allowlist', authMiddleware, requireFeature('guestList'), (req, res) => {
+  const { name } = req.body;
+  if (!name?.trim()) return res.status(400).json({ success: false, error: 'name required' });
+
+  const db = getDb();
+  const session = db.prepare('SELECT * FROM sessions WHERE id = ?').get(req.params.id);
+  if (!session) return res.status(404).json({ success: false, error: 'Session not found' });
+  if (session.hostUserId !== req.user.id)
+    return res.status(403).json({ success: false, error: 'Only the host can manage the guest list' });
+
+  const duplicate = db.prepare(
+    'SELECT id FROM session_allowlist WHERE sessionId = ? AND LOWER(name) = LOWER(?)'
+  ).get(session.id, name.trim());
+  if (duplicate) return res.status(409).json({ success: false, error: 'Name already on the list' });
+
+  db.prepare('INSERT INTO session_allowlist (sessionId, name) VALUES (?, ?)').run(session.id, name.trim());
+  const entries = db.prepare('SELECT * FROM session_allowlist WHERE sessionId = ? ORDER BY addedAt ASC').all(session.id);
+  res.status(201).json({ success: true, data: entries });
+});
+
+// Remove name from guest allowlist (host only)
+router.delete('/:id/allowlist/:entryId', authMiddleware, (req, res) => {
+  const db = getDb();
+  const session = db.prepare('SELECT * FROM sessions WHERE id = ?').get(req.params.id);
+  if (!session) return res.status(404).json({ success: false, error: 'Session not found' });
+  if (session.hostUserId !== req.user.id)
+    return res.status(403).json({ success: false, error: 'Only the host can manage the guest list' });
+
+  db.prepare('DELETE FROM session_allowlist WHERE id = ? AND sessionId = ?').run(req.params.entryId, session.id);
   res.json({ success: true });
 });
 

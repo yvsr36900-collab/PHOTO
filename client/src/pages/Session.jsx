@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useSession } from '../hooks/useSession';
 import { usePhotos } from '../hooks/usePhotos';
-import { addTime, uploadPhoto, downloadZip, exportToDrive, getRsvps, stopSession, restartSession, getSessionMembers, sendHeartbeat } from '../api';
+import { addTime, uploadPhoto, downloadZip, exportToDrive, getRsvps, stopSession, restartSession, getSessionMembers, sendHeartbeat, getAllowlist, addToAllowlist, removeFromAllowlist } from '../api';
 import Timer from '../components/Timer';
 import PhotoGrid from '../components/PhotoGrid';
 import QRDisplay from '../components/QRDisplay';
@@ -23,6 +23,9 @@ export default function SessionPage() {
   const [driveStatus, setDriveStatus] = useState('idle');
   const [members, setMembers] = useState(null);
   const [membersLoading, setMembersLoading] = useState(false);
+  const [allowlist, setAllowlist] = useState(null);
+  const [allowlistInput, setAllowlistInput] = useState('');
+  const [allowlistSaving, setAllowlistSaving] = useState(false);
   const fileRef = useRef();
   const navigate = useNavigate();
 
@@ -48,6 +51,7 @@ export default function SessionPage() {
   useEffect(() => {
     if (tab !== 'manage' || !user || !session || session.hostUserId !== user.id) return;
     loadMembers();
+    if (session.guestListEnabled) loadAllowlist();
     const t = setInterval(loadMembers, 15000);
     return () => clearInterval(t);
   }, [tab, session?.id]);
@@ -157,6 +161,39 @@ export default function SessionPage() {
     }
   }
 
+  async function loadAllowlist() {
+    try {
+      const res = await getAllowlist(id);
+      setAllowlist(res.data.data);
+    } catch {
+      // silently ignore
+    }
+  }
+
+  async function handleAddToAllowlist(e) {
+    e.preventDefault();
+    if (!allowlistInput.trim()) return;
+    setAllowlistSaving(true);
+    try {
+      const res = await addToAllowlist(id, allowlistInput.trim());
+      setAllowlist(res.data.data);
+      setAllowlistInput('');
+    } catch (err) {
+      alert(err.response?.data?.error || 'Failed to add guest');
+    } finally {
+      setAllowlistSaving(false);
+    }
+  }
+
+  async function handleRemoveFromAllowlist(entryId) {
+    try {
+      await removeFromAllowlist(id, entryId);
+      setAllowlist((prev) => prev.filter((e) => e.id !== entryId));
+    } catch {
+      alert('Failed to remove guest');
+    }
+  }
+
   function handlePhotoDeleted(photoId) {
     refreshPhotos();
   }
@@ -216,7 +253,10 @@ export default function SessionPage() {
               {sessionStatus}
             </span>
           </div>
-          <p className="text-gray-500 text-sm">{session.occasionType} · Code: <strong className="text-brand-600 tracking-wider">{session.joinCode}</strong></p>
+          <p className="text-gray-500 text-sm">
+            {session.occasionType} · Code: <strong className="text-brand-600 tracking-wider">{session.joinCode}</strong>
+            {session.guestListEnabled ? <span className="ml-2 text-xs text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded">🔒 Guest List On</span> : null}
+          </p>
         </div>
         <div className="flex items-center gap-3 flex-wrap">
           {isActive && (
@@ -372,6 +412,55 @@ export default function SessionPage() {
             )}
             <p className="text-xs text-gray-400 mt-3">Green = active in the last 30 seconds · auto-refreshes every 15s</p>
           </div>
+
+          {isHost && session.guestListEnabled && (
+            <div className="card">
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h3 className="font-semibold">
+                    🔒 Guest List
+                    <span className="ml-2 text-xs font-normal text-white bg-brand-600 px-1.5 py-0.5 rounded">Restricted</span>
+                  </h3>
+                  <p className="text-xs text-gray-500 mt-0.5">Only names listed here can join the session</p>
+                </div>
+                <button onClick={loadAllowlist} className="btn-secondary text-sm">Refresh</button>
+              </div>
+
+              <form onSubmit={handleAddToAllowlist} className="flex gap-2 mb-4">
+                <input
+                  className="input flex-1 text-sm"
+                  placeholder="Guest display name"
+                  value={allowlistInput}
+                  onChange={(e) => setAllowlistInput(e.target.value)}
+                  required
+                />
+                <button type="submit" className="btn-primary text-sm" disabled={allowlistSaving}>
+                  {allowlistSaving ? '…' : 'Add'}
+                </button>
+              </form>
+
+              {allowlist === null ? (
+                <p className="text-gray-400 text-sm">Loading guest list…</p>
+              ) : allowlist.length === 0 ? (
+                <p className="text-gray-400 text-sm">No guests added yet — anyone who tries to join will be denied.</p>
+              ) : (
+                <div className="divide-y divide-gray-100">
+                  {allowlist.map((entry) => (
+                    <div key={entry.id} className="py-2 flex items-center justify-between text-sm">
+                      <span className="text-gray-800">{entry.name}</span>
+                      <button
+                        onClick={() => handleRemoveFromAllowlist(entry.id)}
+                        className="text-xs text-red-500 hover:text-red-700"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <p className="text-xs text-gray-400 mt-3">Names are matched case-insensitively when guests join</p>
+            </div>
+          )}
 
           {isPremiumHost && (
             <div className="card">

@@ -77,6 +77,14 @@ function initDb() {
     `ALTER TABLE sessions ADD COLUMN status TEXT NOT NULL DEFAULT 'active'`,
     `ALTER TABLE sessions ADD COLUMN stoppedAt TEXT`,
     `ALTER TABLE session_members ADD COLUMN lastSeenAt TEXT`,
+    `ALTER TABLE sessions ADD COLUMN guestListEnabled INTEGER NOT NULL DEFAULT 0`,
+    `CREATE TABLE IF NOT EXISTS session_allowlist (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      sessionId INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      addedAt TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (sessionId) REFERENCES sessions(id)
+    )`,
   ];
   for (const sql of migrations) {
     try { database.exec(sql); } catch { /* column already exists */ }

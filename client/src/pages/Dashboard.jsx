@@ -13,7 +13,7 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ name: '', occasionType: 'Birthday', durationMinutes: 60 });
+  const [form, setForm] = useState({ name: '', occasionType: 'Birthday', durationMinutes: 60, guestListEnabled: false });
   const [error, setError] = useState('');
   const navigate = useNavigate();
 
@@ -83,6 +83,22 @@ export default function Dashboard() {
               <input className="input" type="number" min={5} max={1440} value={form.durationMinutes}
                 onChange={(e) => setForm({ ...form, durationMinutes: e.target.value })} required />
             </div>
+            {(user?.plan === 'standard' || user?.plan === 'premium') && (
+              <div className="md:col-span-2">
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={form.guestListEnabled}
+                    onChange={(e) => setForm({ ...form, guestListEnabled: e.target.checked })}
+                    className="w-4 h-4 accent-brand-600"
+                  />
+                  <span className="text-sm font-medium">
+                    Enable Guest List
+                    <span className="ml-1.5 text-xs font-normal text-gray-500">— only names you approve can join</span>
+                  </span>
+                </label>
+              </div>
+            )}
             <div className="flex items-end gap-3">
               <button type="submit" className="btn-primary" disabled={creating}>
                 {creating ? 'Creating…' : 'Create Session'}

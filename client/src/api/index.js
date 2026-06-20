@@ -37,6 +37,11 @@ export const getGoogleAuthUrl = () => api.get('/auth/google/connect');
 export const getGoogleStatus = () => api.get('/auth/google/status');
 export const disconnectGoogle = () => api.post('/auth/google/disconnect');
 
+// Guest Allowlist
+export const getAllowlist = (sessionId) => api.get(`/sessions/${sessionId}/allowlist`);
+export const addToAllowlist = (sessionId, name) => api.post(`/sessions/${sessionId}/allowlist`, { name });
+export const removeFromAllowlist = (sessionId, entryId) => api.delete(`/sessions/${sessionId}/allowlist/${entryId}`);
+
 // RSVP
 export const submitRsvp = (joinCode, data) => api.post(`/rsvp/${joinCode}`, data);
 export const getRsvps = (sessionId) => api.get(`/rsvp/${sessionId}`);

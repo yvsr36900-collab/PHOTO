@@ -130,7 +130,14 @@ export default function JoinPage() {
   if (step === 'error') return (
     <div className="max-w-md mx-auto px-4 py-20 text-center">
       <p className="text-red-500 text-lg mb-4">{error}</p>
-      <button onClick={() => navigate('/')} className="btn-secondary">Go Home</button>
+      <div className="flex gap-3 justify-center">
+        {error.includes('guest list') && session && (
+          <button onClick={() => { setStep('nameEntry'); setNameInput(''); }} className="btn-primary">
+            Try a Different Name
+          </button>
+        )}
+        <button onClick={() => navigate('/')} className="btn-secondary">Go Home</button>
+      </div>
     </div>
   );
 
@@ -139,7 +146,12 @@ export default function JoinPage() {
       <div className="card w-full max-w-sm text-center">
         <p className="text-3xl mb-3">👋</p>
         <h1 className="text-xl font-bold mb-1">Join {session?.name}</h1>
-        <p className="text-gray-500 text-sm mb-6">{session?.occasionType} · Code: {session?.joinCode}</p>
+        <p className="text-gray-500 text-sm mb-4">{session?.occasionType} · Code: {session?.joinCode}</p>
+        {session?.guestListEnabled && (
+          <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-4">
+            🔒 This session has a guest list — your name must match an invite to join
+          </p>
+        )}
         <form onSubmit={handleNameSubmit} className="space-y-3">
           <input className="input text-center" placeholder="Your display name"
             value={nameInput} onChange={(e) => setNameInput(e.target.value)} required autoFocus />

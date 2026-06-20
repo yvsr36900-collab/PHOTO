@@ -1,9 +1,9 @@
 const { getDb } = require('../db/schema');
 
 const PLAN_LIMITS = {
-  free:     { maxPhotos: 10,        maxSessions: 1,        qrCode: false, rsvp: false, poster: false, driveExport: false },
-  standard: { maxPhotos: 200,       maxSessions: 5,        qrCode: true,  rsvp: false, poster: false, driveExport: false },
-  premium:  { maxPhotos: Infinity,  maxSessions: Infinity, qrCode: true,  rsvp: true,  poster: true,  driveExport: true  },
+  free:     { maxPhotos: 10,        maxSessions: 1,        qrCode: false, rsvp: false, poster: false, driveExport: false, guestList: false },
+  standard: { maxPhotos: 200,       maxSessions: 5,        qrCode: true,  rsvp: false, poster: false, driveExport: false, guestList: true  },
+  premium:  { maxPhotos: Infinity,  maxSessions: Infinity, qrCode: true,  rsvp: true,  poster: true,  driveExport: true,  guestList: true  },
 };
 
 function getLimits(plan) {
